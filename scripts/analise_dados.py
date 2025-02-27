@@ -22,6 +22,17 @@ def coletar_dados(ticker):
         # Selecionar apenas as colunas desejadas
         historico = historico[["Open", "High", "Low", "Close", "Volume"]]
         historico.reset_index(inplace=True)  # Resetar o índice para incluir a coluna "Date"
+        
+        # Formatar a coluna "Date" para remover a parte do horário
+        historico["Date"] = pd.to_datetime(historico["Date"]).dt.date
+        
+        # Arredondar os valores para 2 casas decimais
+        historico = historico.round({"Open": 2, "High": 2, "Low": 2, "Close": 2, "Volume": 2})
+        
+        # Substituir pontos por vírgulas nos valores decimais
+        for col in ["Open", "High", "Low", "Close", "Volume"]:
+            historico[col] = historico[col].astype(str).str.replace(".", ",")
+        
         historico["Ticker"] = ticker  # Adicionar coluna com o ticker
         
         return historico
@@ -40,7 +51,10 @@ for ticker in tqdm(tickers, desc="Coletando dados"):
 # Concatenar todos os resultados
 if resultado:
     df_final = pd.concat(resultado)
-    df_final.to_csv("data/dados_historicos.csv", index=False)
+    
+    # Salvar o DataFrame em um arquivo CSV
+    # Usar barra (|) como separador de colunas
+    df_final.to_csv("data/dados_historicos.csv", index=False, sep="|", encoding="utf-8")
     print("✅ Dados coletados e salvos em 'data/dados_historicos.csv'")
 else:
     print("❌ Nenhum dado foi coletado.")
