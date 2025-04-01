@@ -1,8 +1,8 @@
 #datas
 data/*.csv
 data/*.xlsx
+scripts/data/
 
-\script\data
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
