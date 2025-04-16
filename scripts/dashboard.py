@@ -136,6 +136,7 @@ def salvar_tickers(tickers):
     df = pd.DataFrame(dados)
     df.to_csv(ARQUIVO_TICKERS, index=False)
 
+@st.cache_data(ttl=86400)
 def carregar_tickers_validados():
     """Carrega tickers validados"""
     if os.path.exists(ARQUIVO_TICKERS):
@@ -154,6 +155,7 @@ def formatar_moeda(valor):
 def formatar_percentual(valor):
     return f"{valor:.2f}%"
 
+@st.cache_data(ttl=3600)
 def carregar_dados_historicos(ticker, periodo="1y"):
     try:
         periodo_dias = {
@@ -181,6 +183,7 @@ def carregar_dados_historicos(ticker, periodo="1y"):
         st.error(f"Erro ao carregar dados para {ticker}: {str(e)}")
         return None
 
+@st.cache_data(ttl=3600)
 def obter_dados_fundamentalistas(ticker):
     try:
         acao = yf.Ticker(ticker)
@@ -242,33 +245,49 @@ st.markdown("""
 def main():
     st.title("📊 Dashboard Financeiro - Top 15 Ações B3")
     
-    # Obtém os tickers
+    # Inicialização do session_state
     if 'tickers_validados' not in st.session_state:
         st.session_state.tickers_validados = carregar_tickers_validados()
+    
+    if 'ticker_selecionado' not in st.session_state:
+        st.session_state.ticker_selecionado = st.session_state.tickers_validados[0]
+    
+    if 'periodo_selecionado' not in st.session_state:
+        st.session_state.periodo_selecionado = "6m"
     
     # Sidebar
     st.sidebar.header("Configurações")
     
     if st.sidebar.button("🔄 Atualizar Lista de Tickers"):
+        st.cache_data.clear()
         st.session_state.tickers_validados = carregar_tickers_validados()
         st.rerun()
     
-    ticker_selecionado = st.sidebar.selectbox(
+    # Widgets que atualizam o session_state
+    novo_ticker = st.sidebar.selectbox(
         "Selecione o ativo:", 
         st.session_state.tickers_validados,
-        index=0
+        index=st.session_state.tickers_validados.index(st.session_state.ticker_selecionado),
+        key='select_ticker'
     )
     
-    periodo = st.sidebar.selectbox(
+    novo_periodo = st.sidebar.selectbox(
         "Período de análise:", 
         ["1m", "3m", "6m", "1y", "2y", "3y", "5y"],
-        index=2
+        index=["1m", "3m", "6m", "1y", "2y", "3y", "5y"].index(st.session_state.periodo_selecionado),
+        key='select_periodo'
     )
     
-    # Carregar dados
-    with st.spinner(f"Carregando dados para {ticker_selecionado}..."):
-        dados = carregar_dados_historicos(ticker_selecionado, periodo)
-        dados_fundamentalistas = obter_dados_fundamentalistas(ticker_selecionado)
+    # Verifica mudanças e atualiza
+    if novo_ticker != st.session_state.ticker_selecionado or novo_periodo != st.session_state.periodo_selecionado:
+        st.session_state.ticker_selecionado = novo_ticker
+        st.session_state.periodo_selecionado = novo_periodo
+        st.rerun()
+    
+    # Carregar dados com cache específico
+    with st.spinner(f"Carregando dados para {st.session_state.ticker_selecionado}..."):
+        dados = carregar_dados_historicos(st.session_state.ticker_selecionado, st.session_state.periodo_selecionado)
+        dados_fundamentalistas = obter_dados_fundamentalistas(st.session_state.ticker_selecionado)
     
     if dados is None:
         st.error("Não foi possível carregar os dados para este ativo.")
@@ -377,7 +396,7 @@ def main():
         )
         
         fig.update_layout(
-            title=f"{ticker_selecionado} - Análise Técnica | Período: {periodo}",
+            title=f"{st.session_state.ticker_selecionado} - Análise Técnica | Período: {st.session_state.periodo_selecionado}",
             height=700,
             showlegend=True,
             hovermode="x unified",
@@ -445,20 +464,9 @@ def main():
     
     # Rodapé
     hora_atual = datetime.now(ZoneInfo('America/Sao_Paulo'))
-
     st.sidebar.markdown("---")
     st.sidebar.markdown(f"📅 Última atualização: {hora_atual.strftime('%d/%m/%Y %H:%M')}")
     st.sidebar.markdown("📊 Fonte: Yahoo Finance + Validação Direta")
-
-def carregar_tickers():
-    """Carrega os tickers do arquivo CSV já validado"""
-    try:
-        arquivo_tickers = os.path.join("..", "data", "top_15_tickers.csv")
-        df_tickers = pd.read_csv(arquivo_tickers)
-        return df_tickers["Ticker"].tolist()
-    except Exception as e:
-        st.error(f"Erro ao carregar tickers: {e}")
-        return []
 
 if __name__ == "__main__":
     main()
