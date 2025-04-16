@@ -9,6 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 import time
+from zoneinfo import ZoneInfo
 
 # Configuração da página
 st.set_page_config(
@@ -443,8 +444,10 @@ def main():
                          help="Capacidade de pagar obrigações de curto prazo")
     
     # Rodapé
+    hora_atual = datetime.now(ZoneInfo('America/Sao_Paulo'))
+
     st.sidebar.markdown("---")
-    st.sidebar.markdown(f"📅 Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    st.sidebar.markdown(f"📅 Última atualização: {hora_atual.strftime('%d/%m/%Y %H:%M')}")
     st.sidebar.markdown("📊 Fonte: Yahoo Finance + Validação Direta")
 
 def carregar_tickers():
