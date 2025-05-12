@@ -31,39 +31,29 @@ TICKERS_FALLBACK = [
 ]
 
 def verificar_ticker(ticker, dias_verificacao=5):
-    """Verifica robustamente se um ticker está ativo"""
     try:
         acao = yf.Ticker(ticker)
         info = acao.info
-        
-        # Verificação em 4 camadas
         if not info.get('regularMarketPrice'):
             return False
-            
         if info.get('currency', '').upper() != 'BRL':
             return False
-            
         historico = acao.history(period=f"{dias_verificacao}d")
         if historico.empty or len(historico) < 3:
             return False
-            
         if info.get('averageVolume', 0) < 100000:
             return False
-            
         return True
-        
     except Exception as e:
         print(f"Erro na verificação de {ticker}: {str(e)}")
         return False
 
 def obter_tickers_do_yahoo():
-    """Obtém tickers brasileiros do Yahoo Finance"""
     try:
         url = "https://finance.yahoo.com/quote/%5EBVSP/components/"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
-        
         tickers = []
         table = soup.find('table', {'class': 'W(100%)'})
         if table:
@@ -74,15 +64,12 @@ def obter_tickers_do_yahoo():
                     if not symbol.endswith('.SA'):
                         symbol += '.SA'
                     tickers.append(symbol)
-        
         return tickers if tickers else None
-        
     except Exception as e:
         print(f"Erro ao obter tickers do Yahoo: {str(e)}")
         return None
 
 def filtrar_tickers_ativos(tickers):
-    """Filtra apenas tickers ativos"""
     ativos = []
     for ticker in tqdm(tickers, desc="Validando tickers"):
         if verificar_ticker(ticker):
@@ -92,30 +79,22 @@ def filtrar_tickers_ativos(tickers):
     return ativos
 
 def obter_tickers_alternativos():
-    """Lista secundária de tickers"""
     return [
         "KLBN11.SA", "UGPA3.SA", "CCRO3.SA", "CYRE3.SA", "TOTS3.SA",
         "BRFS3.SA", "GOAU4.SA", "EMBR3.SA", "AZUL4.SA", "CSAN3.SA"
     ]
 
 def obter_melhores_tickers():
-    """Obtém os 15 melhores tickers"""
     print("\n🔍 Iniciando busca por tickers válidos...")
-    
-    # 1. Tentativa - Yahoo Finance
     tickers = obter_tickers_do_yahoo()
     if tickers:
         validos = filtrar_tickers_ativos(tickers)
         if len(validos) >= 15:
             return validos[:15]
-    
-    # 2. Tentativa - Lista Fallback
     print("⚠️ Usando lista fallback principal...")
     validos = filtrar_tickers_ativos(TICKERS_FALLBACK)
     if len(validos) >= 15:
         return validos[:15]
-    
-    # 3. Tentativa - Lista Alternativa
     print("⚠️ Completando com tickers alternativos...")
     extras = obter_tickers_alternativos()
     for t in extras:
@@ -123,11 +102,9 @@ def obter_melhores_tickers():
             break
         if t not in validos and verificar_ticker(t):
             validos.append(t)
-    
     return validos[:15]
 
 def salvar_tickers(tickers):
-    """Salva os tickers com metadados"""
     dados = {
         'Ticker': tickers,
         'Data_Validacao': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -138,16 +115,23 @@ def salvar_tickers(tickers):
 
 @st.cache_data(ttl=86400)
 def carregar_tickers_validados():
-    """Carrega tickers validados"""
     if os.path.exists(ARQUIVO_TICKERS):
         modificado = os.path.getmtime(ARQUIVO_TICKERS)
         if (time.time() - modificado) < (7 * 86400):
             df = pd.read_csv(ARQUIVO_TICKERS)
-            return df['Ticker'].tolist()
-    
+            if not df.empty:
+                return df['Ticker'].tolist()
+
     tickers = obter_melhores_tickers()
+    
+    # Garante que ao menos o fallback seja usado, mesmo se nada passar na verificação
+    if not tickers or len(tickers) == 0:
+        st.warning("Nenhum ticker pôde ser validado. Usando fallback bruto.")
+        tickers = TICKERS_FALLBACK
+
     salvar_tickers(tickers)
     return tickers
+
 
 def formatar_moeda(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -162,23 +146,18 @@ def carregar_dados_historicos(ticker, periodo="1y"):
             "1m": 30, "3m": 90, "6m": 180,
             "1y": 365, "2y": 730, "3y": 1095, "5y": 1825
         }
-        
         data_final = datetime.today()
         data_inicial = data_final - timedelta(days=periodo_dias.get(periodo, 365))
         dados = yf.Ticker(ticker).history(start=data_inicial, end=data_final)
-        
         if dados.empty:
             st.warning(f"Nenhum dado encontrado para {ticker} no período selecionado")
             return None
-        
         dados['MM20'] = dados['Close'].rolling(window=20).mean()
         dados['MM50'] = dados['Close'].rolling(window=50).mean()
         dados['MM200'] = dados['Close'].rolling(window=200).mean()
         dados['Retorno_Diario'] = dados['Close'].pct_change() * 100
         dados['Volatilidade'] = dados['Retorno_Diario'].rolling(window=20).std()
-        
         return dados
-        
     except Exception as e:
         st.error(f"Erro ao carregar dados para {ticker}: {str(e)}")
         return None
@@ -188,7 +167,6 @@ def obter_dados_fundamentalistas(ticker):
     try:
         acao = yf.Ticker(ticker)
         info = acao.info
-        
         dados = {
             'ROE': info.get('returnOnEquity'),
             'Margem_Liquida': info.get('profitMargins'),
@@ -200,15 +178,34 @@ def obter_dados_fundamentalistas(ticker):
             'Dívida/Patrimônio': info.get('debtToEquity'),
             'Volume_Medio_3M': info.get('averageVolume')
         }
-        
         for key in ['ROE', 'Margem_Liquida', 'Dividend_Yield']:
-            if dados[key] is not None:
-                dados[key] = dados[key] * 100 if not isinstance(dados[key], str) else 0
-                
+            if dados[key] is not None and not isinstance(dados[key], str):
+                dados[key] = dados[key] * 100
         return {k: v for k, v in dados.items() if v is not None}
     except Exception as e:
         st.warning(f"Não foi possível obter dados fundamentalistas para {ticker}")
         return {}
+
+# Inicialização segura de sessão
+if 'tickers_validados' not in st.session_state:
+    try:
+        st.session_state.tickers_validados = carregar_tickers_validados()
+    except Exception as e:
+        st.warning("Erro ao carregar tickers. Usando fallback.")
+        st.session_state.tickers_validados = TICKERS_FALLBACK
+
+# Verificação de fallback como última defesa
+if not st.session_state.tickers_validados:
+    st.warning("Nenhum ticker pôde ser validado. Usando fallback.")
+    st.session_state.tickers_validados = TICKERS_FALLBACK
+
+# Inicialização do ticker selecionado
+if 'ticker_selecionado' not in st.session_state:
+    if len(st.session_state.tickers_validados) > 0:
+        st.session_state.ticker_selecionado = st.session_state.tickers_validados[0]
+    else:
+        st.error("Erro crítico: Nenhum ticker disponível.")
+        st.stop()
 
 # CSS personalizado
 st.markdown("""
