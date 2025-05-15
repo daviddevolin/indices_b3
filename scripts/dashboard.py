@@ -74,8 +74,8 @@ def filtrar_tickers_ativos(tickers):
     for ticker in tqdm(tickers, desc="Validando tickers"):
         if verificar_ticker(ticker):
             ativos.append(ticker)
-            if len(ativos) >= 15:
-                break
+        if len(ativos) >= 15:
+            break
     return ativos
 
 def obter_tickers_alternativos():
@@ -123,15 +123,12 @@ def carregar_tickers_validados():
                 return df['Ticker'].tolist()
 
     tickers = obter_melhores_tickers()
-    
-    # Garante que ao menos o fallback seja usado, mesmo se nada passar na verificação
     if not tickers or len(tickers) == 0:
         st.warning("Nenhum ticker pôde ser validado. Usando fallback bruto.")
         tickers = TICKERS_FALLBACK
 
     salvar_tickers(tickers)
     return tickers
-
 
 def formatar_moeda(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -142,22 +139,62 @@ def formatar_percentual(valor):
 @st.cache_data(ttl=3600)
 def carregar_dados_historicos(ticker, periodo="1y"):
     try:
-        periodo_dias = {
-            "1m": 30, "3m": 90, "6m": 180,
-            "1y": 365, "2y": 730, "3y": 1095, "5y": 1825
+        # Mapeamento de períodos para o formato do yfinance
+        periodo_map = {
+            "1m": "1mo",
+            "3m": "3mo",
+            "6m": "6mo",
+            "1y": "1y",
+            "2y": "2y",
+            "3y": "3y",
+            "5y": "5y"
         }
-        data_final = datetime.today()
-        data_inicial = data_final - timedelta(days=periodo_dias.get(periodo, 365))
-        dados = yf.Ticker(ticker).history(start=data_inicial, end=data_final)
+        
+        # Obter dados usando o parâmetro period que é mais confiável
+        dados = yf.Ticker(ticker).history(
+            period=periodo_map.get(periodo, "1y"),
+            interval="1d",
+            auto_adjust=False,
+            prepost=False,
+            actions=False
+        )
+        
         if dados.empty:
             st.warning(f"Nenhum dado encontrado para {ticker} no período selecionado")
             return None
-        dados['MM20'] = dados['Close'].rolling(window=20).mean()
-        dados['MM50'] = dados['Close'].rolling(window=50).mean()
-        dados['MM200'] = dados['Close'].rolling(window=200).mean()
+        
+        # Verificar dados essenciais
+        colunas_essenciais = ['Open', 'High', 'Low', 'Close', 'Volume']
+        for col in colunas_essenciais:
+            if col not in dados.columns:
+                st.error(f"Coluna {col} não encontrada nos dados")
+                return None
+        
+        # Tratamento de fuso horário
+        if dados.index.tz is None:
+            dados.index = dados.index.tz_localize('UTC').tz_convert('America/Sao_Paulo')
+        
+        # Calcular indicadores técnicos (com verificação de dados suficientes)
+        if len(dados) >= 20:
+            dados['MM20'] = dados['Close'].rolling(window=20).mean()
+        else:
+            dados['MM20'] = None
+            
+        if len(dados) >= 50:
+            dados['MM50'] = dados['Close'].rolling(window=50).mean()
+        else:
+            dados['MM50'] = None
+            
+        if len(dados) >= 200:
+            dados['MM200'] = dados['Close'].rolling(window=200).mean()
+        else:
+            dados['MM200'] = None
+            
         dados['Retorno_Diario'] = dados['Close'].pct_change() * 100
         dados['Volatilidade'] = dados['Retorno_Diario'].rolling(window=20).std()
-        return dados
+        
+        return dados.dropna(subset=['Open', 'High', 'Low', 'Close'])
+        
     except Exception as e:
         st.error(f"Erro ao carregar dados para {ticker}: {str(e)}")
         return None
@@ -172,13 +209,11 @@ def obter_dados_fundamentalistas(ticker):
             'Margem_Liquida': info.get('profitMargins'),
             'P/L': info.get('trailingPE'),
             'P/VP': info.get('priceToBook'),
-            'Dividend_Yield': info.get('dividendYield'),
-            'EV/EBITDA': info.get('enterpriseToEbitda'),
             'Liquidez_Corrente': info.get('currentRatio'),
             'Dívida/Patrimônio': info.get('debtToEquity'),
             'Volume_Medio_3M': info.get('averageVolume')
         }
-        for key in ['ROE', 'Margem_Liquida', 'Dividend_Yield']:
+        for key in ['ROE', 'Margem_Liquida']:
             if dados[key] is not None and not isinstance(dados[key], str):
                 dados[key] = dados[key] * 100
         return {k: v for k, v in dados.items() if v is not None}
@@ -194,12 +229,10 @@ if 'tickers_validados' not in st.session_state:
         st.warning("Erro ao carregar tickers. Usando fallback.")
         st.session_state.tickers_validados = TICKERS_FALLBACK
 
-# Verificação de fallback como última defesa
 if not st.session_state.tickers_validados:
     st.warning("Nenhum ticker pôde ser validado. Usando fallback.")
     st.session_state.tickers_validados = TICKERS_FALLBACK
 
-# Inicialização do ticker selecionado
 if 'ticker_selecionado' not in st.session_state:
     if len(st.session_state.tickers_validados) > 0:
         st.session_state.ticker_selecionado = st.session_state.tickers_validados[0]
@@ -241,25 +274,19 @@ st.markdown("""
 
 def main():
     st.title("📊 Dashboard Financeiro - Top 15 Ações B3")
-    
+
     # Inicialização do session_state
-    if 'tickers_validados' not in st.session_state:
-        st.session_state.tickers_validados = carregar_tickers_validados()
-    
-    if 'ticker_selecionado' not in st.session_state:
-        st.session_state.ticker_selecionado = st.session_state.tickers_validados[0]
-    
     if 'periodo_selecionado' not in st.session_state:
         st.session_state.periodo_selecionado = "6m"
-    
+
     # Sidebar
     st.sidebar.header("Configurações")
-    
+
     if st.sidebar.button("🔄 Atualizar Lista de Tickers"):
         st.cache_data.clear()
         st.session_state.tickers_validados = carregar_tickers_validados()
         st.rerun()
-    
+
     # Widgets que atualizam o session_state
     novo_ticker = st.sidebar.selectbox(
         "Selecione o ativo:", 
@@ -267,32 +294,39 @@ def main():
         index=st.session_state.tickers_validados.index(st.session_state.ticker_selecionado),
         key='select_ticker'
     )
-    
+
     novo_periodo = st.sidebar.selectbox(
         "Período de análise:", 
         ["1m", "3m", "6m", "1y", "2y", "3y", "5y"],
         index=["1m", "3m", "6m", "1y", "2y", "3y", "5y"].index(st.session_state.periodo_selecionado),
         key='select_periodo'
     )
-    
+
     # Verifica mudanças e atualiza
     if novo_ticker != st.session_state.ticker_selecionado or novo_periodo != st.session_state.periodo_selecionado:
         st.session_state.ticker_selecionado = novo_ticker
         st.session_state.periodo_selecionado = novo_periodo
         st.rerun()
-    
+
     # Carregar dados com cache específico
     with st.spinner(f"Carregando dados para {st.session_state.ticker_selecionado}..."):
         dados = carregar_dados_historicos(st.session_state.ticker_selecionado, st.session_state.periodo_selecionado)
         dados_fundamentalistas = obter_dados_fundamentalistas(st.session_state.ticker_selecionado)
-    
-    if dados is None:
+
+    if dados is None or dados.empty:
         st.error("Não foi possível carregar os dados para este ativo.")
         st.stop()
-    
+
+    # Debug (opcional)
+    if st.sidebar.checkbox("Mostrar dados brutos (debug)"):
+        st.write("Estatísticas dos dados:")
+        st.write(dados.describe())
+        st.write("Últimos 5 registros:")
+        st.write(dados.tail())
+
     # Layout com abas
     tab1, tab2 = st.tabs(["📈 Análise Técnica", "💰 Análise Fundamentalista"])
-    
+
     with tab1:
         col1, col2, col3, col4 = st.columns(4)
         
@@ -351,35 +385,39 @@ def main():
             row=1, col=1
         )
         
-        fig.add_trace(
-            go.Scatter(
-                x=dados.index,
-                y=dados['MM20'],
-                name="MM20 (1 mês)",
-                line=dict(color='#f39c12', width=2)
-            ),
-            row=1, col=1
-        )
+        # Adicionar médias móveis apenas se existirem
+        if 'MM20' in dados and not dados['MM20'].isnull().all():
+            fig.add_trace(
+                go.Scatter(
+                    x=dados.index,
+                    y=dados['MM20'],
+                    name="MM20 (1 mês)",
+                    line=dict(color='#f39c12', width=2)
+                ),
+                row=1, col=1
+            )
         
-        fig.add_trace(
-            go.Scatter(
-                x=dados.index,
-                y=dados['MM50'],
-                name="MM50 (2.5 meses)",
-                line=dict(color='#3498db', width=2)
-            ),
-            row=1, col=1
-        )
+        if 'MM50' in dados and not dados['MM50'].isnull().all():
+            fig.add_trace(
+                go.Scatter(
+                    x=dados.index,
+                    y=dados['MM50'],
+                    name="MM50 (2.5 meses)",
+                    line=dict(color='#3498db', width=2)
+                ),
+                row=1, col=1
+            )
         
-        fig.add_trace(
-            go.Scatter(
-                x=dados.index,
-                y=dados['MM200'],
-                name="MM200 (10 meses)",
-                line=dict(color='#9b59b6', width=3)
-            ),
-            row=1, col=1
-        )
+        if 'MM200' in dados and not dados['MM200'].isnull().all():
+            fig.add_trace(
+                go.Scatter(
+                    x=dados.index,
+                    y=dados['MM200'],
+                    name="MM200 (10 meses)",
+                    line=dict(color='#9b59b6', width=3)
+                ),
+                row=1, col=1
+            )
         
         fig.add_trace(
             go.Bar(
@@ -406,7 +444,7 @@ def main():
         fig.update_yaxes(title_text="Volume", row=2, col=1)
         
         st.plotly_chart(fig, use_container_width=True)
-    
+
     with tab2:
         if not dados_fundamentalistas:
             st.warning("Dados fundamentalistas não disponíveis para este ativo.")
@@ -418,30 +456,19 @@ def main():
             with col1:
                 st.markdown("### 📈 Rentabilidade")
                 st.metric("ROE (Retorno sobre Patrimônio)", 
-                         formatar_percentual(dados_fundamentalistas.get('ROE', 0)),
-                         help="Mede a eficiência na geração de lucros com o patrimônio líquido")
+                        formatar_percentual(dados_fundamentalistas.get('ROE', 0)),
+                        help="Mede a eficiência na geração de lucros com o patrimônio líquido")
                 
                 st.metric("Margem Líquida", 
-                         formatar_percentual(dados_fundamentalistas.get('Margem_Liquida', 0)),
-                         help="Percentual de lucro líquido em relação à receita total")
-                
-                st.metric("Dividend Yield", 
-                         formatar_percentual(dados_fundamentalistas.get('Dividend_Yield', 0)),
-                         help="Rendimento de dividendos em relação ao preço da ação")
+                        formatar_percentual(dados_fundamentalistas.get('Margem_Liquida', 0)),
+                        help="Percentual de lucro líquido em relação à receita total")
             
             with col2:
                 st.markdown("### 💰 Valuation")
                 st.metric("P/L (Preço/Lucro)", 
-                         f"{dados_fundamentalistas.get('P/L', 0):.2f}",
-                         help="Razão entre preço da ação e lucro por ação")
+                        f"{dados_fundamentalistas.get('P/L', 0):.2f}",
+                        help="Razão entre preço da ação e lucro por ação")
                 
-                st.metric("P/VP (Preço/Valor Patrimonial)", 
-                         f"{dados_fundamentalistas.get('P/VP', 0):.2f}",
-                         help="Razão entre preço da ação e valor patrimonial por ação")
-                
-                st.metric("EV/EBITDA", 
-                         f"{dados_fundamentalistas.get('EV/EBITDA', 0):.2f}",
-                         help="Valor da empresa (dívida + mercado) sobre EBITDA")
             
             st.markdown("---")
             
@@ -449,16 +476,17 @@ def main():
             
             with col3:
                 st.markdown("### 🏦 Endividamento")
+                divida_patrimonio = dados_fundamentalistas.get('Dívida/Patrimônio', 0)
                 st.metric("Dívida/Patrimônio", 
-                         f"{dados_fundamentalistas.get('Dívida/Patrimônio', 0):.2f}",
-                         help="Razão entre dívida líquida e patrimônio líquido")
-                
+                        formatar_percentual(divida_patrimonio),
+                        help="Razão entre dívida líquida e patrimônio líquido (em %)")
+                    
             with col4:
                 st.markdown("### 💧 Liquidez")
                 st.metric("Liquidez Corrente", 
-                         f"{dados_fundamentalistas.get('Liquidez_Corrente', 0):.2f}",
-                         help="Capacidade de pagar obrigações de curto prazo")
-    
+                        f"{dados_fundamentalistas.get('Liquidez_Corrente', 0):.2f}",
+                        help="Capacidade de pagar obrigações de curto prazo")
+
     # Rodapé
     hora_atual = datetime.now(ZoneInfo('America/Sao_Paulo'))
     st.sidebar.markdown("---")
